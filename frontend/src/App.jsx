@@ -13,6 +13,48 @@ const emptyForm = {
   status: "Empty",
 };
 
+const normalizeBin = (bin) => {
+  // Old city-based schema
+  if (bin.city !== undefined && bin.fill_level !== undefined) {
+    return bin;
+  }
+
+  // New sensor-style schema from deployed backend
+  const fillLevel =
+    bin.load_status === "full"
+      ? 100
+      : Math.max(0, Math.min(100, Math.round((bin.weight || 0) * 2)));
+
+  const status =
+    bin.alert || bin.gas_status?.status === "methane_detected"
+      ? "Critical"
+      : fillLevel >= 80
+      ? "Full"
+      : fillLevel >= 40
+      ? "Half Full"
+      : "Empty";
+
+  return {
+    id: bin.id,
+    bin_name: `Bin ${bin.id}`,
+    city: "Sensor Network",
+    location: `Node ${bin.id}`,
+    area:
+      bin.gas_status?.status === "methane_detected"
+        ? "Gas Alert Zone"
+        : "General Zone",
+    fill_level: fillLevel,
+    status,
+    last_updated: bin.last_updated,
+    load_status: bin.load_status,
+    gas_status: bin.gas_status,
+    weight: bin.weight,
+    alert: bin.alert,
+    light_indicator: bin.light_indicator,
+    buzzer: bin.buzzer,
+  };
+};
+
 function App() {
   const [bins, setBins] = useState([]);
   const [cityFilter, setCityFilter] = useState("All");
@@ -24,7 +66,7 @@ function App() {
   const loadBins = async () => {
     try {
       const res = await axios.get(`${API}/bins/`);
-      setBins(res.data);
+      setBins((res.data || []).map(normalizeBin));
     } catch (error) {
       console.error("Error loading bins:", error);
     }
@@ -45,13 +87,15 @@ function App() {
   }, [bins, cityFilter]);
   const optimizedRoute = useMemo(() => {
     return [...filteredBins]
-      .filter((bin) => bin.fill_level >= 60)
+      .filter((bin) => bin.fill_level >= 60 || bin.status === "Critical")
       .sort((a, b) => b.fill_level - a.fill_level)
       .slice(0, 8);
   }, [filteredBins]);
 
   const totalBins = filteredBins.length;
-  const criticalBins = filteredBins.filter((bin) => bin.fill_level >= 80).length;
+  const criticalBins = filteredBins.filter(
+    (bin) => bin.fill_level >= 80 || bin.status === "Critical"
+  ).length;
   const mediumBins = filteredBins.filter(
     (bin) => bin.fill_level >= 40 && bin.fill_level < 80
   ).length;
@@ -76,7 +120,7 @@ function App() {
 
       summary[bin.city].total += 1;
 
-      if (bin.fill_level >= 80) {
+      if (bin.fill_level >= 80 || bin.status === "Critical") {
         summary[bin.city].critical += 1;
       } else if (bin.fill_level >= 40) {
         summary[bin.city].medium += 1;
@@ -94,7 +138,8 @@ function App() {
     return "Empty";
   };
 
-  const getStatusClass = (fillLevel) => {
+  const getStatusClass = (fillLevel, status = "") => {
+    if (status === "Critical") return "critical";
     if (fillLevel >= 80) return "critical";
     if (fillLevel >= 40) return "warning";
     return "safe";
@@ -376,16 +421,23 @@ function App() {
               {criticalBins > 0 ? (
                 <div className="alert-list">
                   {filteredBins
-                    .filter((bin) => bin.fill_level >= 80)
+                    .filter((bin) => bin.fill_level >= 80 || bin.status === "Critical")
                     .map((bin) => (
                       <div className="alert-item" key={bin.id}>
                         <div>
                           <strong>{bin.bin_name}</strong>
                           <p>
                             {bin.location}, {bin.city}
+                            {bin.gas_status?.status === "methane_detected"
+                              ? " • Methane detected"
+                              : ""}
                           </p>
                         </div>
-                        <div className="alert-fill">{bin.fill_level}%</div>
+                        <div className="alert-fill">
+                          {bin.gas_status?.status === "methane_detected"
+                            ? "Gas Alert"
+                            : `${bin.fill_level}%`}
+                        </div>
                       </div>
                     ))}
                 </div>
@@ -540,7 +592,8 @@ function App() {
                             <div className="fill-track">
                               <div
                                 className={`fill-bar ${getStatusClass(
-                                  bin.fill_level
+                                  bin.fill_level,
+                                  bin.status
                                 )}`}
                                 style={{ width: `${bin.fill_level}%` }}
                               ></div>
@@ -550,7 +603,10 @@ function App() {
                         </td>
                         <td>
                           <span
-                            className={`status ${getStatusClass(bin.fill_level)}`}
+                            className={`status ${getStatusClass(
+                              bin.fill_level,
+                              bin.status
+                            )}`}
                           >
                             {bin.status}
                           </span>
@@ -620,12 +676,19 @@ function App() {
                 <h3>{bin.bin_name}</h3>
                 <p>
                   {bin.location}, {bin.city} • {bin.area}
+                  {bin.gas_status?.status === "methane_detected"
+                    ? " • Methane detected"
+                    : ""}
                 </p>
               </div>
 
               <div className="route-priority">
                 <span>Priority</span>
-                <strong>{bin.fill_level}%</strong>
+                <strong>
+                  {bin.gas_status?.status === "methane_detected"
+                    ? "Gas Alert"
+                    : `${bin.fill_level}%`}
+                </strong>
               </div>
 
             </div>
