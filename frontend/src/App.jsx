@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API = "http://127.0.0.1:8002";
+const API = "https://smart-waste-api.onrender.com";
 
 const emptyForm = {
   bin_name: "",
