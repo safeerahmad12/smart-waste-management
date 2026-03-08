@@ -1,43 +1,83 @@
-# Smart Waste Management System
+# Smart Waste Management Dashboard
 
-A smart city monitoring dashboard that tracks waste bin fill levels across multiple cities and helps optimize waste collection routes.
+A smart‑city monitoring system that tracks garbage bin fill levels across multiple cities and helps optimize waste collection routes.
+
+This project simulates an IoT‑based waste management platform where smart bins send data to a central dashboard used by city operators.
+
+---
+
+## Dashboard Preview
+
+### Overview
+![Overview](images/overview-dashboard)
+
+### Bin Network
+![Bin Network](images/bin-network-status)
+
+### Route Optimizer
+![Route Optimizer](images/route-optimizer)
+
+---
 
 ## Features
 
-- Monitor smart garbage bins across multiple cities
-- Real-time bin fill level monitoring
+- Smart bin monitoring across multiple cities
+- Real‑time fill level tracking
 - Critical alerts for bins above 80%
-- Route optimizer for waste collection planning
+- Route prioritization for waste collection
 - Add / edit / delete smart bins
-- Sensor simulation for testing IoT data
-- City-based filtering and analytics
+- Sensor simulation for IoT data testing
 
-## Technologies Used
+---
 
-Frontend
+## Tech Stack
+
+**Frontend**
 - React
 - Axios
-- CSS Dashboard UI
+- CSS
 
-Backend
+**Backend**
 - FastAPI
 - SQLAlchemy
 - SQLite
 
-## Project Architecture
+---
 
-Frontend (React Dashboard)
-↓
-API Calls
-↓
-Backend (FastAPI)
-↓
-Database (SQLite)
+## Architecture
 
-## How to Run the Project
+React Dashboard → FastAPI API → SQLite Database
+
+---
+
+## Run Locally
 
 ### Backend
 
-```bash
+```
 cd backend
+pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8002
+```
+
+### Frontend
+
+```
+cd frontend
+npm install
+npm run dev
+```
+
+---
+
+## Author
+
+Safeer Ahmad  
+Software Design International – TH Aschaffenburg
+
+GitHub: https://github.com/safeerahmad12  
+Portfolio: https://safeerahmad12.github.io/safeer-portfolio/
+
+---
+
+This project was built as a portfolio demonstration of full‑stack development using React and FastAPI.
