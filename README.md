@@ -9,13 +9,13 @@ This project simulates an IoT‑based waste management platform where smart bins
 ## Dashboard Preview
 
 ### Overview
-![Overview](images/overview-dashboard)
+![Overview](images/overview-dashboard.png)
 
 ### Bin Network
-![Bin Network](images/bin-network-status)
+![Bin Network](images/bin-network-status.png)
 
 ### Route Optimizer
-![Route Optimizer](images/route-optimizer)
+![Route Optimizer](images/route-optimizer.png)
 
 ---
 
