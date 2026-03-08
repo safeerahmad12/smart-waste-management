@@ -331,7 +331,7 @@ function App() {
             <section className="top-banner">
               <div>
                 <p className="eyebrow">SMART CITY MONITORING</p>
-                <h1>Waste Network Command Center</h1>
+                <h1>Waste Network Command Center DO95 TEST</h1>
                 <p className="banner-text">
                   Monitor fill levels, manage smart bins, trigger sensor
                   simulations, and detect critical collection zones across
