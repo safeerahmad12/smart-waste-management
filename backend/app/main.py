@@ -12,6 +12,7 @@ app.add_middleware(
         "https://smart-waste-management-orcin.vercel.app",
         "https://smart-waste-management-ivory.vercel.app",
     ],
+    allow_origin_regex=r"https://smart-waste-management-.*\.vercel\.app",
     allow_methods=["*"],
     allow_headers=["*"],
 )
