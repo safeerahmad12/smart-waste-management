@@ -9,9 +9,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
+        "https://smart-waste-management-orcin.vercel.app",
         "https://smart-waste-management-ivory.vercel.app",
     ],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
