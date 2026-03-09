@@ -14,12 +14,16 @@ const emptyForm = {
 };
 
 const normalizeBin = (bin) => {
-  // Old city-based schema
   if (bin.city !== undefined && bin.fill_level !== undefined) {
-    return bin;
+    return {
+      ...bin,
+      priority_score:
+        (bin.fill_level || 0) +
+        (bin.status === "Critical" ? 30 : 0) +
+        (bin.status === "Full" ? 15 : 0),
+    };
   }
 
-  // New sensor-style schema from deployed backend
   const fillLevel =
     bin.load_status === "full"
       ? 100
@@ -52,21 +56,29 @@ const normalizeBin = (bin) => {
     alert: bin.alert,
     light_indicator: bin.light_indicator,
     buzzer: bin.buzzer,
+    priority_score:
+      fillLevel +
+      (bin.alert || bin.gas_status?.status === "methane_detected" ? 30 : 0),
   };
 };
 
 function App() {
   const [bins, setBins] = useState([]);
   const [cityFilter, setCityFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [searchTerm, setSearchTerm] = useState("");
   const [formData, setFormData] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
   const [simulationMessage, setSimulationMessage] = useState("");
   const [activePage, setActivePage] = useState("Overview");
+  const [lastSync, setLastSync] = useState(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
 
   const loadBins = async () => {
     try {
       const res = await axios.get(`${API}/bins/`);
       setBins((res.data || []).map(normalizeBin));
+      setLastSync(new Date());
     } catch (error) {
       console.error("Error loading bins:", error);
     }
@@ -76,20 +88,57 @@ function App() {
     loadBins();
   }, []);
 
+  useEffect(() => {
+    if (!autoRefresh) return;
+
+    const interval = setInterval(() => {
+      loadBins();
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [autoRefresh]);
+
   const cities = useMemo(() => {
     const uniqueCities = [...new Set(bins.map((bin) => bin.city))];
     return ["All", ...uniqueCities];
   }, [bins]);
 
   const filteredBins = useMemo(() => {
-    if (cityFilter === "All") return bins;
-    return bins.filter((bin) => bin.city === cityFilter);
-  }, [bins, cityFilter]);
+    let result = [...bins];
+
+    if (cityFilter !== "All") {
+      result = result.filter((bin) => bin.city === cityFilter);
+    }
+
+    if (statusFilter !== "All") {
+      result = result.filter((bin) => bin.status === statusFilter);
+    }
+
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase();
+      result = result.filter(
+        (bin) =>
+          bin.bin_name.toLowerCase().includes(q) ||
+          bin.city.toLowerCase().includes(q) ||
+          bin.location.toLowerCase().includes(q) ||
+          bin.area.toLowerCase().includes(q)
+      );
+    }
+
+    return result;
+  }, [bins, cityFilter, statusFilter, searchTerm]);
+
   const optimizedRoute = useMemo(() => {
     return [...filteredBins]
       .filter((bin) => bin.fill_level >= 60 || bin.status === "Critical")
-      .sort((a, b) => b.fill_level - a.fill_level)
+      .sort((a, b) => (b.priority_score || b.fill_level) - (a.priority_score || a.fill_level))
       .slice(0, 8);
+  }, [filteredBins]);
+
+  const criticalAlerts = useMemo(() => {
+    return [...filteredBins]
+      .filter((bin) => bin.fill_level >= 80 || bin.status === "Critical")
+      .sort((a, b) => (b.priority_score || b.fill_level) - (a.priority_score || a.fill_level));
   }, [filteredBins]);
 
   const totalBins = filteredBins.length;
@@ -105,6 +154,7 @@ function App() {
     () => new Set(bins.map((bin) => bin.city)).size,
     [bins]
   );
+
   const citySummary = useMemo(() => {
     const summary = {};
 
@@ -115,10 +165,13 @@ function App() {
           critical: 0,
           medium: 0,
           low: 0,
+          avgFill: 0,
+          totalFill: 0,
         };
       }
 
       summary[bin.city].total += 1;
+      summary[bin.city].totalFill += bin.fill_level;
 
       if (bin.fill_level >= 80 || bin.status === "Critical") {
         summary[bin.city].critical += 1;
@@ -129,8 +182,16 @@ function App() {
       }
     });
 
-    return Object.entries(summary);
+    Object.keys(summary).forEach((city) => {
+      summary[city].avgFill = Math.round(
+        summary[city].totalFill / summary[city].total
+      );
+    });
+
+    return Object.entries(summary).sort((a, b) => b[1].critical - a[1].critical);
   }, [bins]);
+
+  const highestRiskCity = citySummary.length > 0 ? citySummary[0] : null;
 
   const getStatusFromFill = (fillLevel) => {
     if (fillLevel >= 80) return "Full";
@@ -208,10 +269,7 @@ function App() {
   };
 
   const handleDelete = async (id) => {
-    const confirmed = window.confirm(
-      "Are you sure you want to delete this smart bin?"
-    );
-
+    const confirmed = window.confirm("Are you sure you want to delete this smart bin?");
     if (!confirmed) return;
 
     try {
@@ -241,9 +299,7 @@ function App() {
   const runSimulation = async () => {
     try {
       const res = await axios.post(`${API}/bins/simulate`);
-      setSimulationMessage(
-        `${res.data.message} - ${res.data.updated_bins} bins updated`
-      );
+      setSimulationMessage(`${res.data.message} - ${res.data.updated_bins} bins updated`);
       loadBins();
     } catch (error) {
       console.error("Error running sensor simulation:", error);
@@ -263,43 +319,23 @@ function App() {
           </div>
 
           <div className="sidebar-nav">
-            <button
-              className={`nav-btn ${activePage === "Overview" ? "active" : ""}`}
-              onClick={() => setActivePage("Overview")}
-            >
-              Overview
-            </button>
-
-            <button
-              className={`nav-btn ${activePage === "Control Panel" ? "active" : ""}`}
-              onClick={() => setActivePage("Control Panel")}
-            >
-              Control Panel
-            </button>
-
-            <button
-              className={`nav-btn ${activePage === "Bin Network Status" ? "active" : ""}`}
-              onClick={() => setActivePage("Bin Network Status")}
-            >
-              Bin Network Status
-            </button>
-
-            <button
-              className={`nav-btn ${activePage === "Route Optimizer" ? "active" : ""}`}
-              onClick={() => setActivePage("Route Optimizer")}
-            >
-              Route Optimizer
-            </button>
+            {["Overview", "Control Panel", "Bin Network Status", "Route Optimizer", "Critical Alerts"].map((page) => (
+              <button
+                key={page}
+                className={`nav-btn ${activePage === page ? "active" : ""}`}
+                onClick={() => setActivePage(page)}
+              >
+                {page}
+              </button>
+            ))}
           </div>
 
           <div className="sidebar-block">
             <div className="sidebar-label">System Status</div>
             <div className="status-chip online">Online</div>
-          </div>
-
-          <div className="sidebar-block">
-            <div className="sidebar-label">Sensor Feed</div>
-            <div className="status-chip active">Active</div>
+            <div className="status-chip active">
+              {autoRefresh ? "Auto Refresh On" : "Auto Refresh Off"}
+            </div>
           </div>
 
           <div className="sidebar-block">
@@ -318,9 +354,49 @@ function App() {
           </div>
 
           <div className="sidebar-block">
+            <div className="sidebar-label">Filters</div>
+            <select
+              className="sidebar-select"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="All">All Status</option>
+              <option value="Full">Full</option>
+              <option value="Half Full">Half Full</option>
+              <option value="Empty">Empty</option>
+              <option value="Critical">Critical</option>
+            </select>
+
+            <input
+              className="sidebar-input"
+              type="text"
+              placeholder="Search city, bin, location..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <div className="sidebar-block">
+            <div className="sidebar-label">Controls</div>
+            <button className="simulate-btn" onClick={runSimulation}>
+              Run Sensor Simulation
+            </button>
+            <button
+              className="secondary-control-btn"
+              onClick={() => setAutoRefresh((prev) => !prev)}
+            >
+              {autoRefresh ? "Disable Auto Refresh" : "Enable Auto Refresh"}
+            </button>
+            {simulationMessage && <p className="simulation-message">{simulationMessage}</p>}
+          </div>
+
+          <div className="sidebar-block">
             <div className="sidebar-label">Coverage</div>
             <div className="mini-metric">{coverageCities} Cities</div>
             <div className="mini-metric">{bins.length} Total Bins</div>
+            <div className="mini-metric">
+              {lastSync ? `Synced: ${lastSync.toLocaleTimeString()}` : "Syncing..."}
+            </div>
           </div>
         </div>
       </aside>
@@ -333,9 +409,8 @@ function App() {
                 <p className="eyebrow">SMART CITY MONITORING</p>
                 <h1>Waste Network Command Center</h1>
                 <p className="banner-text">
-                  Monitor fill levels, manage smart bins, trigger sensor
-                  simulations, and detect critical collection zones across
-                  multiple cities.
+                  Monitor fill levels, detect collection risks, simulate sensor changes,
+                  and manage smart bins across multiple cities.
                 </p>
               </div>
 
@@ -345,8 +420,8 @@ function App() {
                   <strong>{cityFilter}</strong>
                 </div>
                 <div className="banner-kpi">
-                  <span>Critical Alerts</span>
-                  <strong>{criticalBins}</strong>
+                  <span>Highest Risk City</span>
+                  <strong>{highestRiskCity ? highestRiskCity[0] : "N/A"}</strong>
                 </div>
               </div>
             </section>
@@ -356,211 +431,121 @@ function App() {
                 <span className="metric-label">Monitored Bins</span>
                 <h3>{totalBins}</h3>
               </div>
-
               <div className="metric-card critical-card">
                 <span className="metric-label">Critical Fill</span>
                 <h3>{criticalBins}</h3>
               </div>
-
               <div className="metric-card warning-card">
                 <span className="metric-label">Medium Load</span>
                 <h3>{mediumBins}</h3>
               </div>
-
               <div className="metric-card safe-card">
                 <span className="metric-label">Low Fill</span>
                 <h3>{lowBins}</h3>
               </div>
             </section>
-            <section className="ops-panel">
-              <div className="panel-header">
-                <h2>City Overview</h2>
-                <span className="panel-badge">{coverageCities} Cities</span>
-              </div>
 
-              <div className="city-grid">
-                {citySummary.map(([city, stats]) => (
-                  <div className="city-card" key={city}>
-                    <div className="city-card-header">
-                      <h3>{city}</h3>
-                      <span>{stats.total} bins</span>
-                    </div>
-
-                    <div className="city-stats">
-                      <div className="city-stat critical-text">
-                        Critical: {stats.critical}
-                      </div>
-                      <div className="city-stat warning-text">
-                        Medium: {stats.medium}
-                      </div>
-                      <div className="city-stat safe-text">
-                        Low: {stats.low}
-                      </div>
-                    </div>
-
-                    <button
-                      className="city-view-btn"
-                      onClick={() => {
-                        setCityFilter(city);
-                        setActivePage("Bin Network Status");
-                      }}
-                    >
-                      View Network
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-            <section className="ops-panel">
-              <div className="panel-header">
-                <h2>Critical Alerts</h2>
-                <span className="panel-badge">{criticalBins} Active</span>
-              </div>
-
-              {criticalBins > 0 ? (
-                <div className="alert-list">
-                  {filteredBins
-                    .filter((bin) => bin.fill_level >= 80 || bin.status === "Critical")
-                    .map((bin) => (
-                      <div className="alert-item" key={bin.id}>
-                        <div>
-                          <strong>{bin.bin_name}</strong>
-                          <p>
-                            {bin.location}, {bin.city}
-                            {bin.gas_status?.status === "methane_detected"
-                              ? " • Methane detected"
-                              : ""}
-                          </p>
-                        </div>
-                        <div className="alert-fill">
-                          {bin.gas_status?.status === "methane_detected"
-                            ? "Gas Alert"
-                            : `${bin.fill_level}%`}
-                        </div>
-                      </div>
-                    ))}
+            <section className="overview-two-col">
+              <section className="ops-panel">
+                <div className="panel-header">
+                  <h2>City Overview</h2>
+                  <span className="panel-badge">{coverageCities} Cities</span>
                 </div>
-              ) : (
-                <p className="empty-state">
-                  No critical alerts for this region.
-                </p>
-              )}
+
+                <div className="city-grid">
+                  {citySummary.map(([city, stats]) => (
+                    <div className="city-card" key={city}>
+                      <div className="city-card-header">
+                        <h3>{city}</h3>
+                        <span>{stats.total} bins</span>
+                      </div>
+
+                      <div className="city-stats">
+                        <div className="city-stat critical-text">Critical: {stats.critical}</div>
+                        <div className="city-stat warning-text">Medium: {stats.medium}</div>
+                        <div className="city-stat safe-text">Low: {stats.low}</div>
+                        <div className="city-stat neutral-text">Avg Fill: {stats.avgFill}%</div>
+                      </div>
+
+                      <button
+                        className="city-view-btn"
+                        onClick={() => {
+                          setCityFilter(city);
+                          setActivePage("Bin Network Status");
+                        }}
+                      >
+                        View Network
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <section className="ops-panel">
+                <div className="panel-header">
+                  <h2>Top Urgent Bins</h2>
+                  <span className="panel-badge">Priority Queue</span>
+                </div>
+
+                <div className="urgent-list">
+                  {optimizedRoute.slice(0, 5).map((bin, index) => (
+                    <div className="urgent-item" key={bin.id}>
+                      <div className="urgent-rank">{index + 1}</div>
+                      <div className="urgent-info">
+                        <strong>{bin.bin_name}</strong>
+                        <p>
+                          {bin.city} • {bin.location}
+                        </p>
+                      </div>
+                      <div className="urgent-score">{bin.priority_score || bin.fill_level}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
             </section>
           </>
         )}
 
         {activePage === "Control Panel" && (
-          <>
-            <section className="ops-panel">
-              <div className="panel-header">
-                <h2>Simulation Control</h2>
-                <span className="panel-badge">IoT Feed</span>
-              </div>
+          <section className="ops-panel">
+            <div className="panel-header">
+              <h2>{editingId ? "Edit Smart Bin" : "Add New Smart Bin"}</h2>
+              <span className="panel-badge">{editingId ? "Editing" : "Create"}</span>
+            </div>
 
-              <button className="simulate-btn main-sim-btn" onClick={runSimulation}>
-                Run Sensor Simulation
-              </button>
+            <form className="control-form" onSubmit={handleSubmit}>
+              <input type="text" name="bin_name" placeholder="Bin Name" value={formData.bin_name} onChange={handleChange} required />
+              <select name="city" value={formData.city} onChange={handleChange}>
+                <option value="Aschaffenburg">Aschaffenburg</option>
+                <option value="Frankfurt">Frankfurt</option>
+                <option value="Dietzenbach">Dietzenbach</option>
+                <option value="Offenbach">Offenbach</option>
+                <option value="Darmstadt">Darmstadt</option>
+              </select>
+              <input type="text" name="location" placeholder="Location" value={formData.location} onChange={handleChange} required />
+              <input type="text" name="area" placeholder="Area" value={formData.area} onChange={handleChange} required />
+              <input type="number" name="fill_level" min="0" max="100" placeholder="Fill Level" value={formData.fill_level} onChange={handleChange} required />
+              <input type="text" name="status" value={formData.status} readOnly className="readonly-input" />
 
-              {simulationMessage && (
-                <p className="simulation-message">{simulationMessage}</p>
-              )}
-            </section>
-
-            <section className="ops-panel">
-              <div className="panel-header">
-                <h2>{editingId ? "Edit Smart Bin" : "Add New Smart Bin"}</h2>
-                <span className="panel-badge">
-                  {editingId ? "Editing Bin" : "Create Bin"}
-                </span>
-              </div>
-
-              <form className="control-form" onSubmit={handleSubmit}>
-                <input
-                  type="text"
-                  name="bin_name"
-                  placeholder="Bin Name"
-                  value={formData.bin_name}
-                  onChange={handleChange}
-                  required
-                />
-
-                <select
-                  name="city"
-                  value={formData.city}
-                  onChange={handleChange}
-                >
-                  <option value="Aschaffenburg">Aschaffenburg</option>
-                  <option value="Frankfurt">Frankfurt</option>
-                  <option value="Dietzenbach">Dietzenbach</option>
-                  <option value="Offenbach">Offenbach</option>
-                  <option value="Darmstadt">Darmstadt</option>
-                </select>
-
-                <input
-                  type="text"
-                  name="location"
-                  placeholder="Location"
-                  value={formData.location}
-                  onChange={handleChange}
-                  required
-                />
-
-                <input
-                  type="text"
-                  name="area"
-                  placeholder="Area"
-                  value={formData.area}
-                  onChange={handleChange}
-                  required
-                />
-
-                <input
-                  type="number"
-                  name="fill_level"
-                  min="0"
-                  max="100"
-                  placeholder="Fill Level"
-                  value={formData.fill_level}
-                  onChange={handleChange}
-                  required
-                />
-
-                <input
-                  type="text"
-                  name="status"
-                  value={formData.status}
-                  readOnly
-                  className="readonly-input"
-                />
-
-                <div className="form-actions">
-                  <button type="submit" className="primary-btn">
-                    {editingId ? "Update Bin" : "Add Bin"}
+              <div className="form-actions">
+                <button type="submit" className="primary-btn">
+                  {editingId ? "Update Bin" : "Add Bin"}
+                </button>
+                {editingId && (
+                  <button type="button" className="secondary-btn" onClick={resetForm}>
+                    Cancel
                   </button>
-
-                  {editingId && (
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={resetForm}
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </form>
-            </section>
-          </>
+                )}
+              </div>
+            </form>
+          </section>
         )}
 
         {activePage === "Bin Network Status" && (
           <section className="ops-panel table-panel">
             <div className="panel-header">
               <h2>Bin Network Status</h2>
-              <span className="panel-badge">
-                {cityFilter === "All" ? "All Cities" : cityFilter}
-              </span>
+              <span className="panel-badge">{filteredBins.length} Visible</span>
             </div>
 
             <div className="table-wrap">
@@ -568,13 +553,14 @@ function App() {
                 <thead>
                   <tr>
                     <th>ID</th>
-                    <th>Bin Name</th>
+                    <th>Bin</th>
                     <th>City</th>
                     <th>Location</th>
                     <th>Area</th>
-                    <th>Fill Level</th>
+                    <th>Fill</th>
                     <th>Status</th>
-                    <th>Last Updated</th>
+                    <th>Priority</th>
+                    <th>Updated</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -591,10 +577,7 @@ function App() {
                           <div className="fill-cell">
                             <div className="fill-track">
                               <div
-                                className={`fill-bar ${getStatusClass(
-                                  bin.fill_level,
-                                  bin.status
-                                )}`}
+                                className={`fill-bar ${getStatusClass(bin.fill_level, bin.status)}`}
                                 style={{ width: `${bin.fill_level}%` }}
                               ></div>
                             </div>
@@ -602,45 +585,26 @@ function App() {
                           </div>
                         </td>
                         <td>
-                          <span
-                            className={`status ${getStatusClass(
-                              bin.fill_level,
-                              bin.status
-                            )}`}
-                          >
+                          <span className={`status ${getStatusClass(bin.fill_level, bin.status)}`}>
                             {bin.status}
                           </span>
+                        </td>
+                        <td>
+                          <span className="priority-pill">{bin.priority_score || bin.fill_level}</span>
                         </td>
                         <td>{new Date(bin.last_updated).toLocaleString()}</td>
                         <td>
                           <div className="action-buttons">
-                            <button
-                              className="collect-btn"
-                              onClick={() => handleCollected(bin)}
-                            >
-                              Collected
-                            </button>
-
-                            <button
-                              className="edit-btn"
-                              onClick={() => handleEdit(bin)}
-                            >
-                              Edit
-                            </button>
-
-                            <button
-                              className="delete-btn"
-                              onClick={() => handleDelete(bin.id)}
-                            >
-                              Delete
-                            </button>
+                            <button className="collect-btn" onClick={() => handleCollected(bin)}>Collected</button>
+                            <button className="edit-btn" onClick={() => handleEdit(bin)}>Edit</button>
+                            <button className="delete-btn" onClick={() => handleDelete(bin.id)}>Delete</button>
                           </div>
                         </td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan="9">No bins found for this city.</td>
+                      <td colSpan="10">No bins found for current filters.</td>
                     </tr>
                   )}
                 </tbody>
@@ -648,85 +612,77 @@ function App() {
             </div>
           </section>
         )}
+
         {activePage === "Route Optimizer" && (
-  <>
-    <section className="ops-panel">
-      <div className="panel-header">
-        <h2>Collection Route Optimizer</h2>
-        <span className="panel-badge">
-          {cityFilter === "All" ? "All Cities" : cityFilter}
-        </span>
-      </div>
-
-      <p className="route-intro">
-        The system prioritizes bins with higher fill levels to support
-        daily collection planning. Bins shown below should be collected first.
-      </p>
-
-      {optimizedRoute.length > 0 ? (
-        <div className="route-list">
-          {optimizedRoute.map((bin, index) => (
-            <div className="route-card" key={bin.id}>
-
-              <div className="route-rank">
-                {index + 1}
+          <>
+            <section className="ops-panel">
+              <div className="panel-header">
+                <h2>Collection Route Optimizer</h2>
+                <span className="panel-badge">{optimizedRoute.length} Priority Stops</span>
               </div>
 
-              <div className="route-info">
-                <h3>{bin.bin_name}</h3>
-                <p>
-                  {bin.location}, {bin.city} • {bin.area}
-                  {bin.gas_status?.status === "methane_detected"
-                    ? " • Methane detected"
-                    : ""}
-                </p>
-              </div>
+              <p className="route-intro">
+                These bins should be collected first based on fill level and urgency score.
+              </p>
 
-              <div className="route-priority">
-                <span>Priority</span>
-                <strong>
-                  {bin.gas_status?.status === "methane_detected"
-                    ? "Gas Alert"
-                    : `${bin.fill_level}%`}
-                </strong>
-              </div>
+              {optimizedRoute.length > 0 ? (
+                <div className="route-list">
+                  {optimizedRoute.map((bin, index) => (
+                    <div className="route-card" key={bin.id}>
+                      <div className="route-rank">{index + 1}</div>
 
+                      <div className="route-info">
+                        <h3>{bin.bin_name}</h3>
+                        <p>
+                          {bin.location}, {bin.city} • {bin.area}
+                        </p>
+                      </div>
+
+                      <div className="route-priority">
+                        <span>Priority</span>
+                        <strong>{bin.priority_score || bin.fill_level}</strong>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-state">No high-priority bins for this region right now.</p>
+              )}
+            </section>
+          </>
+        )}
+
+{activePage === "Critical Alerts" && (
+          <section className="ops-panel">
+            <div className="panel-header">
+              <h2>Critical Alerts Center</h2>
+              <span className="panel-badge">{criticalAlerts.length} Active</span>
             </div>
-          ))}
-        </div>
-      ) : (
-        <p className="empty-state">
-          No high-priority bins for this region right now.
-        </p>
-      )}
-    </section>
 
-    <section className="ops-panel">
-      <div className="panel-header">
-        <h2>Optimization Logic</h2>
-        <span className="panel-badge">Current Rule</span>
-      </div>
-
-      <div className="logic-box">
-        <p>Current prioritization is based on:</p>
-
-        <ul>
-          <li>Bins above 60% fill level</li>
-          <li>Highest fill level first</li>
-          <li>Top 8 bins shown for collection planning</li>
-        </ul>
-
-        <p>
-          This can later be extended with truck capacity,
-          route distance and city zone clustering.
-        </p>
-      </div>
-    </section>
-  </>
-)}
+            {criticalAlerts.length > 0 ? (
+              <div className="alert-list">
+                {criticalAlerts.map((bin) => (
+                  <div className="alert-item" key={bin.id}>
+                    <div>
+                      <strong>{bin.bin_name}</strong>
+                      <p>
+                        {bin.location}, {bin.city} • {bin.area}
+                      </p>
+                    </div>
+                    <div className="alert-fill">{bin.fill_level}%</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-state">No critical alerts for this region.</p>
+            )}
+          </section>
+        )}
       </main>
     </div>
   );
 }
 
 export default App;
+
+                   
